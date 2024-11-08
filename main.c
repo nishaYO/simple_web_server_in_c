@@ -4,6 +4,7 @@
 #include <unistd.h> 
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 char *response_body(char *path, char *status){
     char *res_body = (char*) malloc(100 * (sizeof(char)));
@@ -18,6 +19,48 @@ char *response_body(char *path, char *status){
     };
     return res_body;
 };
+
+void *handle_client(void *arg){
+    int client_fd = *((int*) arg); // type cast to int pointer and convert to int value by dereference
+    
+    // Read from client request
+	    char buf[1024];
+	    long buflen = sizeof(buf);
+        int bytes_received =  recv(client_fd, buf, buflen, 0);
+	    if(bytes_received <= 0) {
+            perror("RECV\n");
+	    }
+
+        // Extract from request buffer
+	    char method[10], path[50];
+	    sscanf(buf, "%s %s", method, path);
+
+	    // Get response body and status as per the route hit
+        char status[40] = "200 OK";
+	    char* res_body = response_body(path, status);
+        int res_body_len = strlen(res_body);
+
+        // Create http response
+        char response[4098];
+	    snprintf(response, sizeof response, 
+            "HTTP/1.1 %s\r\n"
+            "Content-Type: text/html\r\n"
+            "Content-Length: %d\r\n"
+            "\r\n"
+            "%s",
+            status, res_body_len, res_body
+          );
+        
+        // Send response to the client 
+        send(client_fd, response, strlen(response),  0);  
+        printf("Sent response to client\n");
+
+        // Clear up memory and close connection
+        free(res_body);
+        close(client_fd);
+        
+        return NULL;
+}
 
 int main() { 
     struct sockaddr_in server_addr;
@@ -50,40 +93,15 @@ int main() {
         // Accept connections on socket
         int client_fd = accept(sockfd, 0, 0);
 
-        // Read from client request
-	    char buf[1024];
-	    long buflen = sizeof(buf);
-        int bytes_received =  recv(client_fd, buf, buflen, 0);
-	    if(bytes_received <= 0) {
-            perror("RECV\n");
+        // Spin up a thread to handle client request
+        pthread_t tid;
+        if(pthread_create(&tid, NULL, handle_client, (void*)&client_fd) != 0 ) {
+            close(client_fd);
+            perror("PTHREAD_CREATE");
             continue;
-	    }
-
-        // Extract from request buffer
-	    char method[10], path[50];
-	    sscanf(buf, "%s %s", method, path);
-
-	    // Get response body and status as per the route hit
-        char status[40] = "200 OK";
-	    char* res_body = response_body(path, status);
-        int res_body_len = strlen(res_body);
-
-        // Create http response
-        char response[4098];
-	    snprintf(response, sizeof response, 
-            "HTTP/1.1 %s\r\n"
-            "Content-Type: text/html\r\n"
-            "Content-Length: %d\r\n"
-            "\r\n"
-            "%s",
-            status, res_body_len, res_body
-          );
-
-        send(client_fd, response, strlen(response),  0);  
-        printf("Sent response to client\n");
-        free(res_body);
-
-	    close(client_fd);                             
+        }
+        pthread_detach(tid);
+	                               
     };
     close(sockfd);                                                               
     return 0;                                                                        
